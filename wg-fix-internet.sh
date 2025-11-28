@@ -57,29 +57,25 @@ check_ip_forwarding() {
 check_iptables() {
     echo -e "${YELLOW}[2/4] Проверка правил iptables...${NC}"
     
-    # Проверяем FORWARD правила для wg0 более точно
-    local forward_in=$(iptables -L FORWARD -n -v 2>/dev/null | grep -E "wg0.*ACCEPT" | grep -c "^-A FORWARD.*-i wg0" || echo "0")
-    local forward_out=$(iptables -L FORWARD -n -v 2>/dev/null | grep -E "wg0.*ACCEPT" | grep -c "^-A FORWARD.*-o wg0" || echo "0")
+    # Проверяем FORWARD правила для wg0 через iptables-save (самый надежный способ)
+    local forward_in_found=0
+    local forward_out_found=0
     
-    # Альтернативная проверка через iptables-save (более надежная)
-    if [ "$forward_in" -eq "0" ] || [ "$forward_out" -eq "0" ]; then
-        forward_in=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-i wg0.*-j ACCEPT" || echo "0")
-        forward_out=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-o wg0.*-j ACCEPT" || echo "0")
+    # Проверяем наличие правила -i wg0
+    if iptables-save 2>/dev/null | grep -q "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT"; then
+        forward_in_found=1
     fi
     
-    # Преобразуем в числа, убирая возможные пробелы и переводы строк
-    forward_in=$(echo "$forward_in" | tr -d '[:space:]' | head -c 1)
-    forward_out=$(echo "$forward_out" | tr -d '[:space:]' | head -c 1)
+    # Проверяем наличие правила -o wg0
+    if iptables-save 2>/dev/null | grep -q "^-A FORWARD.*-o $WG_INTERFACE.*-j ACCEPT"; then
+        forward_out_found=1
+    fi
     
-    # Если все еще пусто, устанавливаем 0
-    [ -z "$forward_in" ] && forward_in=0
-    [ -z "$forward_out" ] && forward_out=0
-    
-    if [ "$forward_in" -ge 1 ] && [ "$forward_out" -ge 1 ]; then
+    if [ "$forward_in_found" -eq 1 ] && [ "$forward_out_found" -eq 1 ]; then
         echo -e "${GREEN}✓ Правила FORWARD для wg0 настроены${NC}"
         IPTABLES_FORWARD_OK=true
     else
-        echo -e "${RED}✗ Правила FORWARD для wg0 отсутствуют или неполные (найдено: in=$forward_in, out=$forward_out)${NC}"
+        echo -e "${RED}✗ Правила FORWARD для wg0 отсутствуют или неполные (найдено: in=$forward_in_found, out=$forward_out_found)${NC}"
         IPTABLES_FORWARD_OK=false
     fi
     
@@ -93,9 +89,12 @@ check_iptables() {
     fi
     
     # Проверяем MASQUERADE
-    local masquerade=$(iptables -t nat -L POSTROUTING -n -v 2>/dev/null | grep -c "MASQUERADE" || echo "0")
+    local masquerade_found=0
+    if iptables-save 2>/dev/null | grep -q "^-A POSTROUTING.*MASQUERADE"; then
+        masquerade_found=1
+    fi
     
-    if [ "$masquerade" -ge 1 ]; then
+    if [ "$masquerade_found" -eq 1 ]; then
         echo -e "${GREEN}✓ Правило MASQUERADE настроено${NC}"
         IPTABLES_MASQUERADE_OK=true
         
@@ -224,15 +223,23 @@ fix_iptables() {
     fi
     
     # Проверяем, что правила действительно добавлены
-    local check_in=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT" || echo "0")
-    local check_out=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-o $WG_INTERFACE.*-j ACCEPT" || echo "0")
+    local check_in=0
+    local check_out=0
     
-    if [ "$check_in" -ge 1 ] && [ "$check_out" -ge 1 ]; then
+    if iptables-save 2>/dev/null | grep -q "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT"; then
+        check_in=1
+    fi
+    
+    if iptables-save 2>/dev/null | grep -q "^-A FORWARD.*-o $WG_INTERFACE.*-j ACCEPT"; then
+        check_out=1
+    fi
+    
+    if [ "$check_in" -eq 1 ] && [ "$check_out" -eq 1 ]; then
         echo -e "${GREEN}✓ Правила FORWARD успешно применены и проверены${NC}"
     else
         echo -e "${YELLOW}⚠ Правила добавлены, но проверка показала проблемы (in=$check_in, out=$check_out)${NC}"
         echo -e "${BLUE}  Вывод iptables-save для отладки:${NC}"
-        iptables-save | grep FORWARD | grep wg0 || echo "  Правила не найдены"
+        iptables-save | grep FORWARD | grep "$WG_INTERFACE" || echo "  Правила не найдены"
     fi
     
     # Проверяем и добавляем MASQUERADE
