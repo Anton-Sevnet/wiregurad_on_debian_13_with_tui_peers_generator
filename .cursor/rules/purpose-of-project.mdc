@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+Цель проекта настрить WireGuard server base on Debian 13 trixie in Riga DataCentr of our company, on VirtualMachine with static IP 80.233.165.55
