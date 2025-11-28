@@ -20,11 +20,15 @@ NC='\033[0m' # No Color
 WG_DIR="/etc/wireguard"
 WG_CONF="${WG_DIR}/wg0.conf"
 PEERS_DIR="${WG_DIR}/peers_conf"
-SERVER_IP="80.233.165.55"
-SERVER_PORT="51820"
-WG_SUBNET="10.0.0.0/24"
-WG_SERVER_IP="10.0.0.1"
+SERVER_IP="80.233.165.55"  # Внешний IP сервера (можно переопределить из конфига)
 WG_INTERFACE="wg0"
+
+# Эти значения будут определены автоматически из конфигурации
+SERVER_PORT=""
+WG_SUBNET=""
+WG_SERVER_IP=""
+WG_BASE_IP=""
+WG_NETMASK=""
 
 # Проверка прав root
 check_root() {
@@ -175,6 +179,50 @@ yesno_dialog() {
     fi
 }
 
+# Чтение параметров из конфигурации WireGuard
+read_wg_config() {
+    if [ ! -f "$WG_CONF" ]; then
+        show_msg "Ошибка" "Конфигурация WireGuard не найдена!\n\nФайл $WG_CONF не существует.\nСначала настройте сервер WireGuard." 12 70
+        exit 1
+    fi
+    
+    # Читаем IP адрес сервера и подсеть
+    while IFS= read -r line; do
+        # Пропускаем комментарии и пустые строки
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        
+        # Извлекаем Address (например: Address = 10.77.0.1/24)
+        if [[ $line =~ ^[[:space:]]*Address[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)/([0-9]+) ]]; then
+            WG_SERVER_IP="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            WG_BASE_IP="${BASH_REMATCH[1]}"  # Базовый IP без последнего октета (например, 10.77.0)
+            WG_NETMASK="${BASH_REMATCH[3]}"
+            
+            # Формируем подсеть (например, 10.77.0.0/24)
+            local ip_parts=(${BASH_REMATCH[1]//./ })
+            WG_SUBNET="${ip_parts[0]}.${ip_parts[1]}.${ip_parts[2]}.0/${BASH_REMATCH[3]}"
+        fi
+        
+        # Извлекаем ListenPort (например: ListenPort = 47770)
+        if [[ $line =~ ^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+            SERVER_PORT="${BASH_REMATCH[1]}"
+        fi
+    done < "$WG_CONF"
+    
+    # Проверяем, что все параметры определены
+    if [ -z "$WG_SERVER_IP" ] || [ -z "$WG_SUBNET" ]; then
+        show_msg "Ошибка" "Не удалось определить параметры из конфигурации!\n\nПроверьте файл $WG_CONF.\nУбедитесь, что указан Address в формате IP/маска." 12 70
+        exit 1
+    fi
+    
+    # Если порт не найден, используем значение по умолчанию
+    if [ -z "$SERVER_PORT" ]; then
+        SERVER_PORT="51820"
+        echo -e "${YELLOW}Предупреждение: Порт не найден в конфигурации, используется значение по умолчанию: $SERVER_PORT${NC}"
+    fi
+    
+}
+
 # Проверка наличия WireGuard
 check_wireguard() {
     if ! command -v wg &> /dev/null; then
@@ -204,17 +252,29 @@ get_server_public_key() {
 
 # Определение следующего доступного IP адреса
 get_next_ip() {
-    local base_ip="10.0.0"
     local start=2
     local end=254
     local used_ips=()
     
-    # Получаем список используемых IP из конфигурации
+    # Используем базовый IP из конфигурации (например, 10.77.0)
+    local base_ip="$WG_BASE_IP"
+    
+    if [ -z "$base_ip" ]; then
+        echo ""
+        return 1
+    fi
+    
+    # Получаем список используемых IP из конфигурации сервера
     if [ -f "$WG_CONF" ]; then
         while IFS= read -r line; do
+            # Пропускаем комментарии
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            
+            # Ищем AllowedIPs (например: AllowedIPs = 10.77.0.2/32)
             if [[ $line =~ AllowedIPs[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+) ]]; then
                 local ip="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-                if [[ "$ip" =~ ^10\.0\.0\.([0-9]+)$ ]]; then
+                # Проверяем, что IP принадлежит нашей подсети
+                if [[ "$ip" =~ ^${base_ip//./\\.}\.([0-9]+)$ ]]; then
                     used_ips+=("${BASH_REMATCH[1]}")
                 fi
             fi
@@ -226,15 +286,25 @@ get_next_ip() {
         for peer_file in "$PEERS_DIR"/*.conf; do
             if [ -f "$peer_file" ]; then
                 while IFS= read -r line; do
+                    # Пропускаем комментарии
+                    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+                    
+                    # Ищем Address (например: Address = 10.77.0.2/24)
                     if [[ $line =~ Address[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+) ]]; then
                         local ip="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-                        if [[ "$ip" =~ ^10\.0\.0\.([0-9]+)$ ]]; then
+                        # Проверяем, что IP принадлежит нашей подсети
+                        if [[ "$ip" =~ ^${base_ip//./\\.}\.([0-9]+)$ ]]; then
                             used_ips+=("${BASH_REMATCH[1]}")
                         fi
                     fi
                 done < "$peer_file"
             fi
         done
+    fi
+    
+    # Добавляем IP сервера в список использованных
+    if [[ "$WG_SERVER_IP" =~ ^${base_ip//./\\.}\.([0-9]+)$ ]]; then
+        used_ips+=("${BASH_REMATCH[1]}")
     fi
     
     # Находим первый свободный IP
@@ -333,13 +403,16 @@ create_peer_config() {
     
     local config_file="${PEERS_DIR}/${peer_name}.conf"
     
+    # Определяем маску подсети для клиента
+    local client_netmask="${WG_NETMASK:-24}"
+    
     cat > "$config_file" <<EOF
 [Interface]
 # Приватный ключ пира
 PrivateKey = $peer_private_key
 
 # IP адрес пира в сети WireGuard
-Address = ${peer_ip}/24
+Address = ${peer_ip}/${client_netmask}
 
 # DNS серверы
 DNS = $dns_servers
@@ -444,7 +517,7 @@ create_peer() {
     # Запрашиваем AllowedIPs
     ALLOWED_IPS_CHOICE=$(select_option "Настройка маршрутизации" "Выберите режим маршрутизации:" \
         "0.0.0.0/0 (весь трафик через VPN)" \
-        "10.0.0.0/24 (только сеть WireGuard)" \
+        "${WG_SUBNET} (только сеть WireGuard)" \
         "Другое (ввести вручную)")
     
     if [ -z "$ALLOWED_IPS_CHOICE" ]; then
@@ -457,7 +530,7 @@ create_peer() {
             ALLOWED_IPS="0.0.0.0/0"
             ;;
         1)
-            ALLOWED_IPS="10.0.0.0/24"
+            ALLOWED_IPS="$WG_SUBNET"
             ;;
         2)
             ALLOWED_IPS=$(input_text "AllowedIPs" "Введите AllowedIPs:" "0.0.0.0/0" 10 60)
@@ -516,6 +589,7 @@ main() {
     check_root
     check_and_install_tui
     check_wireguard
+    read_wg_config
     get_server_public_key
     create_peers_dir
     create_peer
