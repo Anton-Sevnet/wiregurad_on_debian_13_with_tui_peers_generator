@@ -10,6 +10,9 @@ export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 export TERM=xterm-256color
 
+# Устанавливаем безопасные права доступа по умолчанию (только для владельца)
+umask 077
+
 # Цвета для вывода
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -105,11 +108,8 @@ show_msg() {
     
     if [ "$TUI_CMD" = "dialog" ]; then
         dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
-        # Очищаем экран после диалога
-        clear
     else
         whiptail --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
-        clear
     fi
 }
 
@@ -342,13 +342,21 @@ generate_peer_keys() {
     local private_key_file="${WG_DIR}/${peer_name}_private.key"
     local public_key_file="${WG_DIR}/${peer_name}_public.key"
     
+    # Устанавливаем umask для безопасных прав доступа
+    local old_umask=$(umask)
+    umask 077
+    
     # Генерируем приватный ключ
     wg genkey > "$private_key_file"
     chmod 600 "$private_key_file"
     
     # Генерируем публичный ключ из приватного
+    umask 133  # 644 в восьмеричной системе
     wg pubkey < "$private_key_file" > "$public_key_file"
     chmod 644 "$public_key_file"
+    
+    # Восстанавливаем umask
+    umask "$old_umask"
     
     PEER_PRIVATE_KEY=$(cat "$private_key_file")
     PEER_PUBLIC_KEY=$(cat "$public_key_file")
@@ -434,7 +442,10 @@ AllowedIPs = $allowed_ips
 PersistentKeepalive = 25
 EOF
     
+    # Устанавливаем безопасные права доступа
     chmod 600 "$config_file"
+    # Убеждаемся, что файл принадлежит root
+    chown root:root "$config_file" 2>/dev/null || true
     echo "$config_file"
 }
 
@@ -585,23 +596,22 @@ create_peer() {
     SUCCESS_MSG+="Конфигурация также выведена в STDOUT."
     
     show_msg "Успех" "$SUCCESS_MSG" 12 70
-    
-    # Очищаем экран после завершения TUI
-    clear
 }
 
 # Функция очистки экрана при выходе
 cleanup_on_exit() {
     # Выходим из альтернативного режима экрана (если dialog его включил)
-    tput rmcup 2>/dev/null
-    # Очищаем экран
+    tput rmcup 2>/dev/null || true
+    # Очищаем экран и возвращаем терминал в нормальное состояние
     clear
-    # Сбрасываем терминал в нормальное состояние
-    tput reset 2>/dev/null || reset 2>/dev/null || clear
+    # Сбрасываем терминал
+    reset 2>/dev/null || tput reset 2>/dev/null || clear
     # Возвращаем курсор в нормальное состояние
-    tput cnorm 2>/dev/null
+    tput cnorm 2>/dev/null || true
     # Показываем курсор
-    echo -ne "\033[?25h"
+    echo -ne "\033[?25h" 2>/dev/null || true
+    # Дополнительная очистка для dialog
+    stty sane 2>/dev/null || true
 }
 
 # Главная функция
