@@ -105,8 +105,11 @@ show_msg() {
     
     if [ "$TUI_CMD" = "dialog" ]; then
         dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
+        # Очищаем экран после диалога
+        clear
     else
         whiptail --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
+        clear
     fi
 }
 
@@ -582,10 +585,30 @@ create_peer() {
     SUCCESS_MSG+="Конфигурация также выведена в STDOUT."
     
     show_msg "Успех" "$SUCCESS_MSG" 12 70
+    
+    # Очищаем экран после завершения TUI
+    clear
+}
+
+# Функция очистки экрана при выходе
+cleanup_on_exit() {
+    # Выходим из альтернативного режима экрана (если dialog его включил)
+    tput rmcup 2>/dev/null
+    # Очищаем экран
+    clear
+    # Сбрасываем терминал в нормальное состояние
+    tput reset 2>/dev/null || reset 2>/dev/null || clear
+    # Возвращаем курсор в нормальное состояние
+    tput cnorm 2>/dev/null
+    # Показываем курсор
+    echo -ne "\033[?25h"
 }
 
 # Главная функция
 main() {
+    # Устанавливаем обработчик для очистки экрана при выходе
+    trap cleanup_on_exit EXIT
+    
     check_root
     check_and_install_tui
     check_wireguard
@@ -593,6 +616,10 @@ main() {
     get_server_public_key
     create_peers_dir
     create_peer
+    
+    # Очищаем экран перед выходом
+    clear
+    tput reset 2>/dev/null || reset 2>/dev/null || clear
 }
 
 # Запуск скрипта
