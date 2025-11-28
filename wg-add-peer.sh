@@ -331,8 +331,13 @@ get_next_ip() {
 # Создание директории для конфигураций пиров
 create_peers_dir() {
     if [ ! -d "$PEERS_DIR" ]; then
+        # Сохраняем текущий umask
+        local old_umask=$(umask)
+        umask 077
         mkdir -p "$PEERS_DIR"
         chmod 700 "$PEERS_DIR"
+        # Восстанавливаем umask
+        umask "$old_umask"
     fi
 }
 
@@ -441,6 +446,9 @@ AllowedIPs = $allowed_ips
 # Keepalive для прохождения через NAT
 PersistentKeepalive = 25
 EOF
+    
+    # Восстанавливаем umask
+    umask "$old_umask"
     
     # Устанавливаем безопасные права доступа
     chmod 600 "$config_file"
