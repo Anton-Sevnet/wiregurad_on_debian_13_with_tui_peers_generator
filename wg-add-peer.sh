@@ -5,6 +5,11 @@
 # Скрипт для создания пиров WireGuard через текстовый интерфейс
 ###############################################################################
 
+# Настройка кодировки и терминала для корректного отображения
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export TERM=xterm-256color
+
 # Цвета для вывода
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +42,8 @@ check_and_install_tui() {
     if command -v dialog &> /dev/null; then
         echo -e "${GREEN}✓ dialog найден${NC}"
         TUI_CMD="dialog"
+        # Используем ASCII символы для рамок
+        export DIALOGOPTS="--ascii-lines --no-shadow --colors"
         return 0
     fi
     
@@ -93,7 +100,7 @@ show_msg() {
     local width="${4:-60}"
     
     if [ "$TUI_CMD" = "dialog" ]; then
-        dialog --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
+        dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
     else
         whiptail --title "$title" --msgbox "$message" "$height" "$width" 2>&1 >/dev/tty
     fi
@@ -108,7 +115,7 @@ input_text() {
     local width="${5:-60}"
     
     if [ "$TUI_CMD" = "dialog" ]; then
-        dialog --title "$title" --inputbox "$prompt" "$height" "$width" "$default" 2>&1 >/dev/tty
+        dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --inputbox "$prompt" "$height" "$width" "$default" 2>&1 >/dev/tty
     else
         whiptail --title "$title" --inputbox "$prompt" "$height" "$width" "$default" 2>&1 >/dev/tty
     fi
@@ -131,7 +138,7 @@ select_option() {
             menu_items+=("$i" "$opt")
             ((i++))
         done
-        result=$(dialog --title "$title" --menu "$prompt" "$height" "$width" "$height" "${menu_items[@]}" 2>&1 >/dev/tty)
+        result=$(dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --menu "$prompt" "$height" "$width" "$height" "${menu_items[@]}" 2>&1 >/dev/tty)
         echo "$result"
     else
         local menu_items=()
@@ -162,7 +169,7 @@ yesno_dialog() {
     local width="${4:-60}"
     
     if [ "$TUI_CMD" = "dialog" ]; then
-        dialog --title "$title" --yesno "$message" "$height" "$width" 2>&1 >/dev/tty
+        dialog --clear --ascii-lines --no-shadow --backtitle "WireGuard Peer Manager" --title "$title" --yesno "$message" "$height" "$width" 2>&1 >/dev/tty
     else
         whiptail --title "$title" --yesno "$message" "$height" "$width" 2>&1 >/dev/tty
     fi
