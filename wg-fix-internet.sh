@@ -57,6 +57,20 @@ check_ip_forwarding() {
 check_iptables() {
     echo -e "${YELLOW}[2/4] Проверка правил iptables...${NC}"
     
+    # Проверяем INPUT правило для wg0
+    local input_found=0
+    if iptables-save 2>/dev/null | grep -q "^-A INPUT.*-i $WG_INTERFACE.*-j ACCEPT"; then
+        input_found=1
+    fi
+    
+    if [ "$input_found" -eq 1 ]; then
+        echo -e "${GREEN}✓ Правило INPUT для wg0 настроено${NC}"
+        IPTABLES_INPUT_OK=true
+    else
+        echo -e "${RED}✗ Правило INPUT для wg0 отсутствует${NC}"
+        IPTABLES_INPUT_OK=false
+    fi
+    
     # Проверяем FORWARD правила для wg0 через iptables-save (самый надежный способ)
     local forward_in_found=0
     local forward_out_found=0
@@ -203,7 +217,18 @@ fix_ip_forwarding() {
 fix_iptables() {
     echo -e "${YELLOW}Исправление правил iptables...${NC}"
     
-    # Удаляем старые правила если они есть (чтобы избежать дублирования)
+    # Удаляем старые INPUT правила если они есть (чтобы избежать дублирования)
+    while iptables -D INPUT -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do :; done
+    
+    # Добавляем INPUT правило для wg0 (чтобы клиенты могли пинговать сервер)
+    iptables -A INPUT -i "$WG_INTERFACE" -j ACCEPT
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ Добавлено правило: INPUT -i $WG_INTERFACE -j ACCEPT${NC}"
+    else
+        echo -e "${RED}✗ Не удалось добавить правило INPUT -i $WG_INTERFACE${NC}"
+    fi
+    
+    # Удаляем старые FORWARD правила если они есть (чтобы избежать дублирования)
     while iptables -D FORWARD -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do :; done
     while iptables -D FORWARD -o "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do :; done
     
@@ -223,8 +248,13 @@ fix_iptables() {
     fi
     
     # Проверяем, что правила действительно добавлены
+    local check_input=0
     local check_in=0
     local check_out=0
+    
+    if iptables-save 2>/dev/null | grep -q "^-A INPUT.*-i $WG_INTERFACE.*-j ACCEPT"; then
+        check_input=1
+    fi
     
     if iptables-save 2>/dev/null | grep -q "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT"; then
         check_in=1
@@ -234,12 +264,12 @@ fix_iptables() {
         check_out=1
     fi
     
-    if [ "$check_in" -eq 1 ] && [ "$check_out" -eq 1 ]; then
-        echo -e "${GREEN}✓ Правила FORWARD успешно применены и проверены${NC}"
+    if [ "$check_input" -eq 1 ] && [ "$check_in" -eq 1 ] && [ "$check_out" -eq 1 ]; then
+        echo -e "${GREEN}✓ Правила INPUT и FORWARD успешно применены и проверены${NC}"
     else
-        echo -e "${YELLOW}⚠ Правила добавлены, но проверка показала проблемы (in=$check_in, out=$check_out)${NC}"
+        echo -e "${YELLOW}⚠ Правила добавлены, но проверка показала проблемы (input=$check_input, in=$check_in, out=$check_out)${NC}"
         echo -e "${BLUE}  Вывод iptables-save для отладки:${NC}"
-        iptables-save | grep FORWARD | grep "$WG_INTERFACE" || echo "  Правила не найдены"
+        iptables-save | grep -E "(INPUT|FORWARD)" | grep "$WG_INTERFACE" || echo "  Правила не найдены"
     fi
     
     # Проверяем и добавляем MASQUERADE
@@ -293,6 +323,7 @@ main() {
     # Инициализация переменных
     IP_FORWARDING_OK=false
     IP_FORWARDING_PERSISTENT=true
+    IPTABLES_INPUT_OK=false
     IPTABLES_FORWARD_OK=false
     IPTABLES_MASQUERADE_OK=false
     WG_INTERFACE_OK=true
@@ -318,6 +349,11 @@ main() {
     
     if [ "$IP_FORWARDING_PERSISTENT" = false ]; then
         echo -e "${YELLOW}⚠ IP forwarding не настроен для постоянной работы${NC}"
+        issues_found=true
+    fi
+    
+    if [ "$IPTABLES_INPUT_OK" = false ]; then
+        echo -e "${RED}✗ Правило INPUT для wg0 отсутствует${NC}"
         issues_found=true
     fi
     
@@ -368,7 +404,7 @@ main() {
             fix_ip_forwarding
         fi
         
-        if [ "$IPTABLES_FORWARD_OK" = false ] || [ "$IPTABLES_MASQUERADE_OK" = false ]; then
+        if [ "$IPTABLES_INPUT_OK" = false ] || [ "$IPTABLES_FORWARD_OK" = false ] || [ "$IPTABLES_MASQUERADE_OK" = false ]; then
             fix_iptables
         fi
         
@@ -394,6 +430,12 @@ main() {
             echo "  # Включить IP forwarding:"
             echo "  sysctl -w net.ipv4.ip_forward=1"
             echo "  echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf"
+            echo ""
+        fi
+        
+        if [ "$IPTABLES_INPUT_OK" = false ]; then
+            echo "  # Добавить правило INPUT:"
+            echo "  iptables -A INPUT -i $WG_INTERFACE -j ACCEPT"
             echo ""
         fi
         

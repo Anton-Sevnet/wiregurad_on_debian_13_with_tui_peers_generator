@@ -41,7 +41,26 @@ fi
 echo -e "${BLUE}Внешний интерфейс: $EXTERNAL_INTERFACE${NC}"
 echo ""
 
+# Удаляем все существующие правила для wg0 в INPUT
+echo -e "${YELLOW}Удаление старых правил INPUT для $WG_INTERFACE...${NC}"
+while iptables -D INPUT -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do
+    echo -e "${BLUE}  Удалено: INPUT -i $WG_INTERFACE${NC}"
+done
+
+# Добавляем INPUT правило
+echo ""
+echo -e "${YELLOW}Добавление правила INPUT...${NC}"
+
+iptables -A INPUT -i "$WG_INTERFACE" -j ACCEPT
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ Добавлено: INPUT -i $WG_INTERFACE -j ACCEPT${NC}"
+else
+    echo -e "${RED}✗ Ошибка при добавлении правила INPUT -i $WG_INTERFACE${NC}"
+    exit 1
+fi
+
 # Удаляем все существующие правила для wg0 в FORWARD
+echo ""
 echo -e "${YELLOW}Удаление старых правил FORWARD для $WG_INTERFACE...${NC}"
 while iptables -D FORWARD -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do
     echo -e "${BLUE}  Удалено: FORWARD -i $WG_INTERFACE${NC}"
@@ -93,12 +112,16 @@ fi
 echo ""
 echo -e "${YELLOW}Проверка примененных правил...${NC}"
 
+check_input=$(iptables-save 2>/dev/null | grep -c "^-A INPUT.*-i $WG_INTERFACE.*-j ACCEPT" || echo "0")
 check_in=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT" || echo "0")
 check_out=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-o $WG_INTERFACE.*-j ACCEPT" || echo "0")
 check_masq=$(iptables-save 2>/dev/null | grep -c "^-A POSTROUTING.*-o $EXTERNAL_INTERFACE.*-j MASQUERADE" || echo "0")
 
-if [ "$check_in" -ge 1 ] && [ "$check_out" -ge 1 ] && [ "$check_masq" -ge 1 ]; then
+if [ "$check_input" -ge 1 ] && [ "$check_in" -ge 1 ] && [ "$check_out" -ge 1 ] && [ "$check_masq" -ge 1 ]; then
     echo -e "${GREEN}✓ Все правила успешно применены!${NC}"
+    echo ""
+    echo -e "${BLUE}Текущие правила INPUT для wg0:${NC}"
+    iptables -L INPUT -n -v | grep -E "(wg0|Chain|target)" | head -5
     echo ""
     echo -e "${BLUE}Текущие правила FORWARD:${NC}"
     iptables -L FORWARD -n -v | grep -E "(wg0|Chain|target)"
@@ -106,7 +129,7 @@ if [ "$check_in" -ge 1 ] && [ "$check_out" -ge 1 ] && [ "$check_masq" -ge 1 ]; t
     echo -e "${BLUE}Текущие правила MASQUERADE:${NC}"
     iptables -t nat -L POSTROUTING -n -v | grep MASQUERADE
 else
-    echo -e "${RED}✗ Проверка показала проблемы (in=$check_in, out=$check_out, masq=$check_masq)${NC}"
+    echo -e "${RED}✗ Проверка показала проблемы (input=$check_input, in=$check_in, out=$check_out, masq=$check_masq)${NC}"
     exit 1
 fi
 

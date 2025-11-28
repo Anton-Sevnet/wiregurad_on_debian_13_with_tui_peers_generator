@@ -67,6 +67,9 @@ iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 # Разрешить WireGuard порт (по умолчанию 51820/UDP)
 iptables -A INPUT -p udp --dport 51820 -j ACCEPT
 
+# Разрешить трафик с интерфейса WireGuard (чтобы клиенты могли пинговать сервер)
+iptables -A INPUT -i wg0 -j ACCEPT
+
 # Разрешить пересылку пакетов через WireGuard интерфейс
 iptables -A FORWARD -i wg0 -j ACCEPT
 iptables -A FORWARD -o wg0 -j ACCEPT
@@ -492,6 +495,9 @@ iptables -t nat -L POSTROUTING -n -v
 # Включить IP forwarding
 sysctl -w net.ipv4.ip_forward=1
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# Добавить правило INPUT для wg0 (чтобы клиенты могли пинговать сервер)
+iptables -A INPUT -i wg0 -j ACCEPT
 
 # Добавить правила FORWARD (замените wg0 на ваш интерфейс, если отличается)
 iptables -A FORWARD -i wg0 -j ACCEPT

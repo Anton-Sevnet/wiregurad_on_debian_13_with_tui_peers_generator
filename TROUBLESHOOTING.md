@@ -14,6 +14,7 @@ sudo ./wg-fix-internet.sh
 
 Скрипт автоматически проверит:
 - ✅ IP forwarding (включение и постоянная настройка)
+- ✅ Правило iptables INPUT для wg0 (чтобы клиенты могли пинговать сервер)
 - ✅ Правила iptables FORWARD для wg0
 - ✅ Правило MASQUERADE для NAT
 - ✅ Сохранение правил для автозагрузки
@@ -37,8 +38,9 @@ sudo ./wg-fix-internet.sh
 ### Причины проблемы
 
 1. **IP forwarding выключен** - система не пересылает пакеты между интерфейсами
-2. **Отсутствуют правила FORWARD** - файрвол блокирует пересылку пакетов через wg0
-3. **Отсутствует правило MASQUERADE** - нет NAT для выхода в интернет
+2. **Отсутствует правило INPUT для wg0** - файрвол блокирует входящий трафик с интерфейса wg0 (клиенты не могут пинговать сервер)
+3. **Отсутствуют правила FORWARD** - файрвол блокирует пересылку пакетов через wg0
+4. **Отсутствует правило MASQUERADE** - нет NAT для выхода в интернет
 
 ### Ручная диагностика
 
@@ -59,7 +61,23 @@ sysctl -w net.ipv4.ip_forward=1
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 ```
 
-#### Шаг 2: Проверка правил FORWARD
+#### Шаг 2: Проверка правила INPUT для wg0
+
+```bash
+iptables -L INPUT -n -v | grep wg0
+```
+
+**Ожидаемый результат:** Должна быть строка с `wg0`:
+```
+ACCEPT     all  --  wg0    *       ...
+```
+
+**Если правила нет:**
+```bash
+iptables -A INPUT -i wg0 -j ACCEPT
+```
+
+#### Шаг 3: Проверка правил FORWARD
 
 ```bash
 iptables -L FORWARD -n -v
@@ -77,7 +95,7 @@ iptables -A FORWARD -i wg0 -j ACCEPT
 iptables -A FORWARD -o wg0 -j ACCEPT
 ```
 
-#### Шаг 3: Проверка правила MASQUERADE
+#### Шаг 4: Проверка правила MASQUERADE
 
 ```bash
 iptables -t nat -L POSTROUTING -n -v
@@ -97,7 +115,7 @@ ip route | grep default
 iptables -t nat -A POSTROUTING -o ens18 -j MASQUERADE
 ```
 
-#### Шаг 4: Сохранение правил
+#### Шаг 5: Сохранение правил
 
 После исправления обязательно сохраните правила:
 
@@ -112,7 +130,7 @@ iptables-save > /etc/iptables/rules.v4
 systemctl enable netfilter-persistent
 ```
 
-#### Шаг 5: Перезапуск WireGuard
+#### Шаг 6: Перезапуск WireGuard
 
 ```bash
 wg-quick down wg0

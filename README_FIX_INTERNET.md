@@ -30,17 +30,22 @@ sudo ./wg-fix-internet.sh
 - Проверяет, включен ли IP forwarding (`net.ipv4.ip_forward = 1`)
 - Проверяет, настроен ли он для постоянной работы (в `/etc/sysctl.conf`)
 
-### 2. Правила iptables FORWARD
+### 2. Правила iptables INPUT
+- Проверяет наличие правила для принятия трафика с интерфейса `wg0`
+- Должно быть правило:
+  - `INPUT -i wg0 -j ACCEPT` (необходимо для того, чтобы клиенты могли пинговать сервер)
+
+### 3. Правила iptables FORWARD
 - Проверяет наличие правил для пересылки пакетов через интерфейс `wg0`
 - Должны быть правила:
   - `FORWARD -i wg0 -j ACCEPT`
   - `FORWARD -o wg0 -j ACCEPT`
 
-### 3. Правило MASQUERADE
+### 4. Правило MASQUERADE
 - Проверяет наличие правила NAT для выхода в интернет
 - Автоматически определяет внешний интерфейс из конфигурации WireGuard
 
-### 4. Сохранение правил
+### 5. Сохранение правил
 - Проверяет, сохранены ли правила iptables для автозагрузки
 - Включает `netfilter-persistent` если необходимо
 
@@ -64,18 +69,23 @@ sudo ./wg-fix-internet.sh
    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
    ```
 
-2. **Добавляет правила FORWARD:**
+2. **Добавляет правило INPUT:**
+   ```bash
+   iptables -A INPUT -i wg0 -j ACCEPT
+   ```
+
+3. **Добавляет правила FORWARD:**
    ```bash
    iptables -A FORWARD -i wg0 -j ACCEPT
    iptables -A FORWARD -o wg0 -j ACCEPT
    ```
 
-3. **Добавляет правило MASQUERADE:**
+4. **Добавляет правило MASQUERADE:**
    ```bash
    iptables -t nat -A POSTROUTING -o <внешний_интерфейс> -j MASQUERADE
    ```
 
-4. **Сохраняет правила:**
+5. **Сохраняет правила:**
    ```bash
    iptables-save > /etc/iptables/rules.v4
    systemctl enable netfilter-persistent
@@ -98,6 +108,9 @@ wg-quick up wg0
 # Проверить IP forwarding
 sysctl net.ipv4.ip_forward
 # Должно быть: net.ipv4.ip_forward = 1
+
+# Проверить правило INPUT для wg0
+iptables -L INPUT -n -v | grep wg0
 
 # Проверить правила FORWARD
 iptables -L FORWARD -n -v | grep wg0
