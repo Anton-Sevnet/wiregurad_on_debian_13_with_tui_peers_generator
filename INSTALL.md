@@ -442,6 +442,74 @@ iptables -L INPUT -n -v | grep 51820
 sysctl net.ipv4.ip_forward
 ```
 
+Должно вернуть `net.ipv4.ip_forward = 1`. Если возвращает `0`, включите:
+```bash
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+```
+
+### Проблема: Клиенты подключаются, но нет доступа в интернет
+
+**Автоматическая диагностика и исправление:**
+
+Используйте скрипт диагностики:
+```bash
+# Скачайте скрипт на сервер (если его еще нет)
+# Затем запустите:
+sudo ./wg-fix-internet.sh
+```
+
+Скрипт автоматически проверит и исправит:
+- IP forwarding (включение и постоянная настройка)
+- Правила iptables FORWARD для wg0
+- Правило MASQUERADE для NAT
+- Сохранение правил для автозагрузки
+
+**Ручная диагностика:**
+
+1. Проверьте IP forwarding:
+```bash
+sysctl net.ipv4.ip_forward
+# Должно быть: net.ipv4.ip_forward = 1
+```
+
+2. Проверьте правила FORWARD:
+```bash
+iptables -L FORWARD -n -v
+# Должны быть правила для wg0:
+# ACCEPT     all  --  *      wg0     ...
+# ACCEPT     all  --  wg0    *       ...
+```
+
+3. Проверьте правило MASQUERADE:
+```bash
+iptables -t nat -L POSTROUTING -n -v
+# Должно быть правило MASQUERADE для внешнего интерфейса (например, ens18)
+```
+
+4. Если что-то отсутствует, исправьте:
+```bash
+# Включить IP forwarding
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# Добавить правила FORWARD (замените wg0 на ваш интерфейс, если отличается)
+iptables -A FORWARD -i wg0 -j ACCEPT
+iptables -A FORWARD -o wg0 -j ACCEPT
+
+# Добавить MASQUERADE (замените ens18 на ваш внешний интерфейс)
+iptables -t nat -A POSTROUTING -o ens18 -j MASQUERADE
+
+# Сохранить правила
+iptables-save > /etc/iptables/rules.v4
+```
+
+5. Перезапустите WireGuard:
+```bash
+wg-quick down wg0
+wg-quick up wg0
+```
+
 ### Тест подключения с клиента
 ```bash
 # На клиенте
