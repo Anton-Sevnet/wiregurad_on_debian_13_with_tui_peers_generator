@@ -57,16 +57,39 @@ check_ip_forwarding() {
 check_iptables() {
     echo -e "${YELLOW}[2/4] Проверка правил iptables...${NC}"
     
-    # Проверяем FORWARD правила для wg0
-    local forward_in=$(iptables -L FORWARD -n -v 2>/dev/null | grep -c "wg0.*ACCEPT" || echo "0")
-    local forward_out=$(iptables -L FORWARD -n -v 2>/dev/null | grep -c "wg0.*ACCEPT" || echo "0")
+    # Проверяем FORWARD правила для wg0 более точно
+    local forward_in=$(iptables -L FORWARD -n -v 2>/dev/null | grep -E "wg0.*ACCEPT" | grep -c "^-A FORWARD.*-i wg0" || echo "0")
+    local forward_out=$(iptables -L FORWARD -n -v 2>/dev/null | grep -E "wg0.*ACCEPT" | grep -c "^-A FORWARD.*-o wg0" || echo "0")
+    
+    # Альтернативная проверка через iptables-save (более надежная)
+    if [ "$forward_in" -eq "0" ] || [ "$forward_out" -eq "0" ]; then
+        forward_in=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-i wg0.*-j ACCEPT" || echo "0")
+        forward_out=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-o wg0.*-j ACCEPT" || echo "0")
+    fi
+    
+    # Преобразуем в числа, убирая возможные пробелы и переводы строк
+    forward_in=$(echo "$forward_in" | tr -d '[:space:]' | head -c 1)
+    forward_out=$(echo "$forward_out" | tr -d '[:space:]' | head -c 1)
+    
+    # Если все еще пусто, устанавливаем 0
+    [ -z "$forward_in" ] && forward_in=0
+    [ -z "$forward_out" ] && forward_out=0
     
     if [ "$forward_in" -ge 1 ] && [ "$forward_out" -ge 1 ]; then
         echo -e "${GREEN}✓ Правила FORWARD для wg0 настроены${NC}"
         IPTABLES_FORWARD_OK=true
     else
-        echo -e "${RED}✗ Правила FORWARD для wg0 отсутствуют или неполные${NC}"
+        echo -e "${RED}✗ Правила FORWARD для wg0 отсутствуют или неполные (найдено: in=$forward_in, out=$forward_out)${NC}"
         IPTABLES_FORWARD_OK=false
+    fi
+    
+    # Проверяем политику FORWARD по умолчанию
+    local forward_policy=$(iptables -L FORWARD -n 2>/dev/null | grep "^:FORWARD" | awk '{print $4}' | tr -d '[]')
+    if [ "$forward_policy" = "DROP" ] || [ "$forward_policy" = "ACCEPT" ]; then
+        echo -e "${BLUE}  Политика FORWARD по умолчанию: $forward_policy${NC}"
+        if [ "$forward_policy" = "DROP" ] && [ "$IPTABLES_FORWARD_OK" = false ]; then
+            echo -e "${YELLOW}  ⚠ Политика DROP требует явных правил ACCEPT для wg0${NC}"
+        fi
     fi
     
     # Проверяем MASQUERADE
@@ -82,6 +105,12 @@ check_iptables() {
     else
         echo -e "${RED}✗ Правило MASQUERADE отсутствует${NC}"
         IPTABLES_MASQUERADE_OK=false
+    fi
+    
+    # Показываем текущие правила FORWARD для отладки
+    if [ "$IPTABLES_FORWARD_OK" = false ]; then
+        echo -e "${BLUE}  Текущие правила FORWARD:${NC}"
+        iptables -L FORWARD -n -v | grep -E "(wg0|Chain|target)" | head -10
     fi
     
     echo ""
@@ -175,19 +204,35 @@ fix_ip_forwarding() {
 fix_iptables() {
     echo -e "${YELLOW}Исправление правил iptables...${NC}"
     
-    # Проверяем и добавляем FORWARD правила
-    if ! iptables -C FORWARD -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -i "$WG_INTERFACE" -j ACCEPT
+    # Удаляем старые правила если они есть (чтобы избежать дублирования)
+    while iptables -D FORWARD -i "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do :; done
+    while iptables -D FORWARD -o "$WG_INTERFACE" -j ACCEPT 2>/dev/null; do :; done
+    
+    # Добавляем правила заново
+    iptables -A FORWARD -i "$WG_INTERFACE" -j ACCEPT
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Добавлено правило: FORWARD -i $WG_INTERFACE -j ACCEPT${NC}"
     else
-        echo -e "${GREEN}✓ Правило FORWARD -i $WG_INTERFACE уже существует${NC}"
+        echo -e "${RED}✗ Не удалось добавить правило FORWARD -i $WG_INTERFACE${NC}"
     fi
     
-    if ! iptables -C FORWARD -o "$WG_INTERFACE" -j ACCEPT 2>/dev/null; then
-        iptables -A FORWARD -o "$WG_INTERFACE" -j ACCEPT
+    iptables -A FORWARD -o "$WG_INTERFACE" -j ACCEPT
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Добавлено правило: FORWARD -o $WG_INTERFACE -j ACCEPT${NC}"
     else
-        echo -e "${GREEN}✓ Правило FORWARD -o $WG_INTERFACE уже существует${NC}"
+        echo -e "${RED}✗ Не удалось добавить правило FORWARD -o $WG_INTERFACE${NC}"
+    fi
+    
+    # Проверяем, что правила действительно добавлены
+    local check_in=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-i $WG_INTERFACE.*-j ACCEPT" || echo "0")
+    local check_out=$(iptables-save 2>/dev/null | grep -c "^-A FORWARD.*-o $WG_INTERFACE.*-j ACCEPT" || echo "0")
+    
+    if [ "$check_in" -ge 1 ] && [ "$check_out" -ge 1 ]; then
+        echo -e "${GREEN}✓ Правила FORWARD успешно применены и проверены${NC}"
+    else
+        echo -e "${YELLOW}⚠ Правила добавлены, но проверка показала проблемы (in=$check_in, out=$check_out)${NC}"
+        echo -e "${BLUE}  Вывод iptables-save для отладки:${NC}"
+        iptables-save | grep FORWARD | grep wg0 || echo "  Правила не найдены"
     fi
     
     # Проверяем и добавляем MASQUERADE
