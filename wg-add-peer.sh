@@ -422,6 +422,10 @@ create_peer_config() {
     # Определяем маску подсети для клиента
     local client_netmask="${WG_NETMASK:-24}"
     
+    # Устанавливаем umask для безопасных прав доступа
+    local old_umask=$(umask)
+    umask 077
+    
     cat > "$config_file" <<EOF
 [Interface]
 # Приватный ключ пира
